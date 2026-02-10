@@ -1,0 +1,807 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>番茄钟 GAL 智能助手</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+    <div id="app" class="app-container">
+        <!-- 主页面结构 -->
+        <div class="main-layout">
+            <!-- 左侧角色列表 -->
+            <div class="character-sidebar">
+                <div class="sidebar-header">
+                    <h2>角色卡</h2>
+                    <button class="btn-icon" @click="showAddCharacterModal = true" title="新建角色">
+                        <span>+</span>
+                    </button>
+                </div>
+                <div class="character-list">
+                    <div 
+                        v-for="char in characters" 
+                        :key="char.id"
+                        :class="['character-item', { active: activeCharacter?.id === char.id }]"
+                    >
+                        <div @click="selectCharacter(char)" class="char-select-area">
+                            <img :src="char.avatar" :alt="char.name" class="char-avatar">
+                            <div class="char-info">
+                                <div class="char-name">{{ char.name }}</div>
+                                <div class="char-status">好感度: {{ char.affection }}/100</div>
+                            </div>
+                        </div>
+                        <button @click.stop="deleteCharacter(char.id)" class="btn-icon delete-char-btn" title="删除角色">✕</button>
+                    </div>
+                </div>
+                
+                <!-- 表情分类展示（仅当有活跃角色时） -->
+                <div v-if="activeCharacter" class="emotion-sidebar">
+                    <h3>表情分类</h3>
+                    
+                    <!-- 基础表情 -->
+                    <div class="emotion-category-sidebar">
+                        <h4>基础表情</h4>
+                        <div class="emotion-grid-sidebar">
+                            <!-- 只显示角色实际拥有的表情 -->
+                            <div 
+                                v-for="(src, emotion) in activeCharacter.emotions" 
+                                :key="emotion" 
+                                class="emotion-item-sidebar"
+                                v-if="src && (emotion === '开心' || emotion === '难过' || emotion === '思考' || src !== './default/happy.png' && src !== './default/sad.png' && src !== './default/confused.png')"
+                            >
+                                <img :src="src" :alt="emotion" class="emotion-image-sidebar">
+                                <div class="emotion-name-sidebar">{{ emotion }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 萌系表情 -->
+                    <div class="emotion-category-sidebar">
+                        <h4>萌系表情</h4>
+                        <div class="emotion-item-sidebar">
+                            <img :src="activeCharacter.chibi" alt="萌系" class="emotion-image-sidebar">
+                            <div class="emotion-name-sidebar">萌系</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 自定义表情 -->
+                    <div v-if="activeCharacter.customEmotions && activeCharacter.customEmotions.length > 0" class="emotion-category-sidebar">
+                        <h4>自定义表情</h4>
+                        <div class="emotion-grid-sidebar">
+                            <div v-for="(emotion, index) in activeCharacter.customEmotions" :key="index" class="emotion-item-sidebar">
+                                <img :src="emotion.src" :alt="emotion.name" class="emotion-image-sidebar">
+                                <div class="emotion-name-sidebar">{{ emotion.name }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 中间主工作区 -->
+            <div class="main-workspace">
+                <!-- 顶部导航 -->
+                <div class="top-nav">
+                    <div class="nav-tabs">
+                        <button 
+                            :class="['tab', { active: currentMode === 'pomodoro' }]"
+                            @click="currentMode = 'pomodoro'"
+                        >🍅 番茄钟</button>
+                        <button 
+                            :class="['tab', { active: currentMode === 'study' }]"
+                            @click="currentMode = 'study'"
+                        >📚 学习</button>
+                    </div>
+                    <div class="top-controls">
+                        <button class="btn-icon music-btn" @click="showMusicModal = true" title="音乐播放">
+                            🎵
+                        </button>
+                        <button class="btn-icon" @click="showDailyCheckIn = true" title="每日打卡">
+                            📅
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 模式内容区 -->
+                <div class="content-area">
+                    <!-- 番茄钟模式 -->
+                    <div v-if="currentMode === 'pomodoro'" class="mode-container pomodoro-mode">
+                        <div class="pomodoro-main">
+                            <!-- 角色立绘 -->
+                            <div class="character-display" v-if="activeCharacter">
+                                <div class="emotion-display">
+                                    <img 
+                                        :src="activeCharacter.emotions[currentEmotion] || activeCharacter.emotions['开心'] || './default/happy.png'" 
+                                        :alt="currentEmotion"
+                                        class="character-image"
+                                        :class="{ 'idle-animation': !isPomodoroRunning }"
+                                    >
+                                </div>
+                                <div v-if="showHeartAnimation" class="heart-animation">💗</div>
+                            </div>
+
+                            <!-- 番茄钟计时器 -->
+                            <div class="timer-section">
+                                <div class="timer-display">
+                                    {{ formatTime(timeRemaining) }}
+                                </div>
+                                <div class="timer-label">
+                                    {{ timerType === 'work' ? '工作中' : '休息中' }}
+                                </div>
+
+                                <!-- 时间点选择 -->
+                                <div class="time-presets">
+                                    <button 
+                                        v-for="preset in timePresets"
+                                        :key="preset.value"
+                                        :class="['preset-btn', { active: pomodoroMinutes === preset.value }]"
+                                        @click="setPomodoroTime(preset.value)"
+                                    >
+                                        {{ preset.label }}
+                                    </button>
+                                </div>
+
+                                <!-- 控制按钮 -->
+                                <div class="timer-controls">
+                                    <button 
+                                        class="btn-primary"
+                                        @click="togglePomodoro"
+                                    >
+                                        {{ isPomodoroRunning ? '暂停' : '开始' }}
+                                    </button>
+                                    <button 
+                                        class="btn-secondary"
+                                        @click="resetPomodoro"
+                                    >
+                                        重置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 聊天框 -->
+                        <div class="chat-section" v-if="activeCharacter">
+                            <div class="dialog-box">
+                                <div class="dialog-text">{{ characterDialog }}</div>
+                            </div>
+                            <div class="input-wrapper">
+                                <textarea 
+                                    v-model="userInput"
+                                    @keypress.enter.exact="sendMessage"
+                                    placeholder="输入消息..."
+                                    class="text-input"
+                                ></textarea>
+                                <button @click="sendMessage" class="btn-send">发送</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 学习模式 -->
+                    <div v-if="currentMode === 'study'" :class="['mode-container', 'study-mode', { 'reading-mode': isReadingMode }]">
+                        <div class="study-layout">
+                            <!-- 左侧 Q版角色 -->
+                            <div class="study-character-small" v-if="activeCharacter && !isReadingMode">
+                                <img 
+                                    :src="activeCharacter.chibi || activeCharacter.emotions['开心']" 
+                                    :alt="activeCharacter.name"
+                                    class="q-character"
+                                >
+                            </div>
+
+                            <!-- 中间内容阅读区 -->
+                            <div class="study-content" :class="{ 'full-width': isReadingMode || isMarkdownMode }">
+                                <div class="content-header" v-if="!isReadingMode && !isMarkdownMode">
+                    <h3>{{ studyContent.title }}</h3>
+                    <div class="chapter-navigation">
+                        <div class="chapter-info">
+                            第 {{ currentChapter + 1 }} / {{ studyContent.chapters.length }} 章
+                        </div>
+                        <div class="chapter-progress">
+                            <input 
+                                type="range" 
+                                :min="0" 
+                                :max="studyContent.chapters.length - 1" 
+                                :value="currentChapter" 
+                                @input="goToChapter($event.target.value)"
+                                class="chapter-slider"
+                            >
+                        </div>
+                        <div class="chapter-input">
+                            <label>章节：</label>
+                            <input 
+                                type="number" 
+                                :min="1" 
+                                :max="studyContent.chapters.length" 
+                                :value="currentChapter + 1" 
+                                @change="goToChapter(parseInt($event.target.value) - 1)"
+                                class="chapter-number-input"
+                            >
+                        </div>
+                    </div>
+                </div>
+                                <div v-if="!isMarkdownMode" class="chapter-text" :class="{ 'reading-text': isReadingMode }">
+                                    <h2 v-if="isReadingMode">{{ studyContent.chapters[currentChapter]?.title || '' }}</h2>
+                                    <div v-if="!isTranslationMode">
+                                        {{ studyContent.chapters[currentChapter]?.text || '' }}
+                                    </div>
+                                    <div v-else class="translation-content">
+                                        <h3>原文：</h3>
+                                        <div class="original-text">{{ studyContent.chapters[currentChapter]?.text || '' }}</div>
+                                        <h3>翻译：</h3>
+                                        <div class="translated-text">{{ studyContent.chapters[currentChapter]?.translation || '翻译中...' }}</div>
+                                    </div>
+                                </div>
+                                <!-- MARKDOWN模式 -->
+                                <div v-else class="markdown-mode">
+                                    <h2>MARKDOWN编辑</h2>
+                                    <textarea 
+                                        v-model="markdownContent"
+                                        placeholder="在此输入MARKDOWN内容..."
+                                        class="markdown-textarea"
+                                    ></textarea>
+                                    <button @click="processMarkdown" class="btn-primary">处理MARKDOWN</button>
+                                    <div class="markdown-preview" v-if="processedMarkdown">
+                                        <h3>预览</h3>
+                                        <div class="markdown-content" v-html="processedMarkdown"></div>
+                                    </div>
+                                </div>
+                                <div class="chapter-nav" v-if="!isReadingMode && !isMarkdownMode">
+                                    <button 
+                                        @click="previousChapter"
+                                        :disabled="currentChapter === 0"
+                                        class="btn-secondary"
+                                    >
+                                        ← 上一章
+                                    </button>
+                                    <button 
+                                        @click="nextChapter"
+                                        :disabled="currentChapter >= studyContent.chapters.length - 1"
+                                        class="btn-secondary"
+                                    >
+                                        下一章 →
+                                    </button>
+                                </div>
+                                <!-- 阅读模式的导航 -->
+                                <div class="reading-nav" v-if="isReadingMode">
+                                    <button 
+                                        @click="previousChapter"
+                                        :disabled="currentChapter === 0"
+                                        class="btn-reading"
+                                    >
+                                        ←
+                                    </button>
+                                    <button 
+                                        @click="nextChapter"
+                                        :disabled="currentChapter >= studyContent.chapters.length - 1"
+                                        class="btn-reading"
+                                    >
+                                        →
+                                    </button>
+                                    <button 
+                                        @click="toggleReadingMode"
+                                        class="btn-reading"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 右侧AI吐槽浮窗 -->
+                            <div class="study-ai-panel" v-if="!isReadingMode">
+                                <div class="ai-panel-header">
+                                    <h4>AI 吐槽</h4>
+                                    <button @click="analyzeCurrentChapter" class="btn-primary">分析</button>
+                                </div>
+                                <div class="ai-responses">
+                                    <div 
+                                        v-for="(response, index) in aiAnalysis"
+                                        :key="index"
+                                        :class="['ai-response', response.type]"
+                                    >
+                                        <div class="response-type">{{ response.title }}</div>
+                                        <div class="response-content">{{ response.content }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 学习工具栏 -->
+                        <div class="study-toolbar" v-if="!isReadingMode">
+                            <button class="btn-secondary" @click="importStudyContent" :disabled="isImporting">📚 导入内容</button>
+                            <button class="btn-secondary" @click="toggleReadingMode">📖 阅读模式</button>
+                            <button class="btn-secondary" @click="toggleTranslation">🌐 翻译</button>
+                            <button class="btn-secondary" @click="toggleMarkdownMode">📝 MARKDOWN模式</button>
+                            <button class="btn-secondary" @click="manualEditContent">✏️ 编辑</button>
+                        </div>
+                        
+                        <!-- 聊天区域 -->
+                        <div class="chat-section" v-if="!isReadingMode && activeCharacter">
+                            <div class="dialog-box">
+                                <div class="dialog-text">{{ characterDialog }}</div>
+                            </div>
+                            <div class="input-wrapper">
+                                <textarea 
+                                    v-model="userInput"
+                                    @keypress.enter.exact="sendMessage"
+                                    placeholder="输入消息..."
+                                    class="text-input"
+                                ></textarea>
+                                <button @click="sendMessage" class="btn-send">发送</button>
+                            </div>
+                        </div>
+                        
+                        <!-- 导入进度显示 -->
+                        <div class="import-progress" v-if="isImporting">
+                            <div class="progress-header">
+                                <span>正在导入内容...</span>
+                                <button class="btn-cancel" @click="cancelImport">取消</button>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" :style="{ width: importProgress + '%' }"></div>
+                            </div>
+                            <div class="progress-text">{{ importProgress }}%</div>
+                        </div>
+                        
+                        <!-- 隐藏的文件输入 -->
+                        <input 
+                            ref="studyContentInput"
+                            type="file"
+                            @change="handleStudyContentImport"
+                            style="display: none"
+                            accept=".txt,.md,.json,.pdf,.doc,.docx"
+                        >
+                    </div>
+
+                    <!-- 聊天模式 -->
+                    <div v-if="currentMode === 'chat'" class="mode-container chat-mode">
+                        <div class="chat-layout">
+                            <div class="chat-history">
+                                <div 
+                                    v-for="(msg, index) in chatHistory"
+                                    :key="index"
+                                    :class="['chat-message', msg.role]"
+                                >
+                                    <div class="message-content">{{ msg.content }}</div>
+                                    <div v-if="msg.suggestions" class="message-suggestions">
+                                        <span 
+                                            v-for="(sugg, i) in msg.suggestions"
+                                            :key="i"
+                                            class="suggestion-tag"
+                                        >
+                                            {{ sugg }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chat-input-area">
+                                <textarea 
+                                    v-model="chatInput"
+                                    @keypress.enter.ctrl="sendChatMessage"
+                                    placeholder="输入问题或内容... (Ctrl+Enter 发送)"
+                                    class="chat-textarea"
+                                ></textarea>
+                                <button @click="sendChatMessage" class="btn-primary">发送给AI</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧便签面板 -->
+            <div class="notes-sidebar">
+                <div class="notes-header">
+                    <h3>便签</h3>
+                    <button class="btn-icon" @click="addNote">+</button>
+                </div>
+                <div class="notes-list">
+                    <div 
+                        v-for="(note, index) in notes"
+                        :key="index"
+                        class="note-item"
+                    >
+                        <div class="note-header">
+                            <button @click.stop="deleteNote(index)" class="btn-icon">✕</button>
+                        </div>
+                        <textarea 
+                            v-model="notes[index]"
+                            class="note-textarea"
+                            placeholder="输入便签内容..."
+                            @blur="saveLocalData"
+                        ></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 模态框 -->
+        <!-- 新建角色模态框 -->
+        <div v-if="showAddCharacterModal" class="modal-overlay" @click="showAddCharacterModal = false">
+            <div class="modal modal-large" @click.stop>
+                <h2>创建新角色</h2>
+                <form @submit.prevent="createCharacter">
+                    <input 
+                        v-model="newCharacter.name"
+                        placeholder="角色名称"
+                        class="input-field"
+                        required
+                    >
+                    <textarea 
+                        v-model="newCharacter.personality"
+                        placeholder="角色人设描述"
+                        class="input-field"
+                        rows="4"
+                    ></textarea>
+                    <input 
+                        type="file"
+                        @change="uploadCharacterAvatar"
+                        class="input-field"
+                        accept="image/*"
+                        title="上传角色头像"
+                    >
+                    
+                    <!-- 表情管理 -->
+                    <div class="emotion-management">
+                        <h3>表情管理</h3>
+                        
+                        <!-- 萌系表情 -->
+                        <div class="emotion-category">
+                            <h4>萌系表情</h4>
+                            <div class="emotion-item">
+                                <img :src="newCharacter.chibi" alt="萌系" class="emotion-image chibi-image">
+                                <div class="emotion-name">萌系</div>
+                                <input 
+                                    type="file"
+                                    @change="uploadChibiEmotion"
+                                    class="input-field"
+                                    accept="image/*"
+                                    title="上传萌系表情"
+                                >
+                            </div>
+                        </div>
+                        
+                        <!-- 自定义表情差分 -->
+                        <div class="emotion-category">
+                            <h4>自定义表情差分</h4>
+                            <div class="emotion-grid">
+                                <div v-for="(emotion, index) in newCharacter.customEmotions" :key="index" class="emotion-item">
+                                    <img :src="emotion.src" :alt="emotion.name" class="emotion-image">
+                                    <div class="emotion-name">{{ emotion.name }}</div>
+                                    <button @click.stop="removeCustomEmotion(index)" class="btn-icon remove-emotion">✕</button>
+                                </div>
+                                <div @click="addCustomEmotion" class="emotion-item add-emotion-btn">
+                                    <span class="add-emotion-icon">+</span>
+                                    <div class="emotion-name">添加表情</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 标签管理 -->
+                        <div class="tag-management">
+                            <h4>标签管理</h4>
+                            <div class="tag-section">
+                                <div class="tags-container">
+                                    <span v-for="(tag, index) in newCharacter.tags" :key="index" class="tag">
+                                        {{ tag }}
+                                        <button @click.stop="removeTag(index)" class="btn-icon remove-tag">✕</button>
+                                    </span>
+                                </div>
+                                <div class="add-tag">
+                                    <input 
+                                        v-model="newTag"
+                                        placeholder="添加标签"
+                                        class="input-field small-input"
+                                        @keypress.enter="addTag"
+                                    >
+                                    <button type="button" @click="addTag" class="btn-secondary">添加标签</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-buttons">
+                        <button type="submit" class="btn-primary">创建</button>
+                        <button type="button" @click="showAddCharacterModal = false" class="btn-secondary">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 角色创建模态框 -->
+        <div v-if="showAddCharacterModal" class="modal-overlay" @click="showAddCharacterModal = false">
+            <div class="modal modal-large" @click.stop>
+                <h2>创建新角色</h2>
+                <form @submit.prevent="createCharacter">
+                    <input 
+                        v-model="newCharacter.name"
+                        placeholder="角色名称"
+                        class="input-field"
+                        required
+                    >
+                    <textarea 
+                        v-model="newCharacter.personality"
+                        placeholder="角色人设描述"
+                        class="input-field"
+                        rows="4"
+                    ></textarea>
+                    <input 
+                        type="file"
+                        @change="uploadCharacterAvatar"
+                        class="input-field"
+                        accept="image/*"
+                        title="上传角色头像"
+                    >
+                    
+                    <!-- 表情管理 -->
+                    <div class="emotion-management">
+                        <h3>表情管理</h3>
+                        
+                        <!-- 基础表情 -->
+                        <div class="emotion-category">
+                            <h4>基础表情（至少需要上传：高兴、失落、平静）</h4>
+                            <div class="emotion-grid">
+                                <div class="emotion-item">
+                                    <img :src="newCharacter.emotions['开心'] || './default/happy.png'" alt="高兴" class="emotion-image">
+                                    <div class="emotion-name">高兴</div>
+                                    <input 
+                                        type="file"
+                                        @change="uploadEmotion('开心', $event)"
+                                        class="input-field"
+                                        accept="image/*"
+                                        title="上传高兴表情"
+                                    >
+                                </div>
+                                <div class="emotion-item">
+                                    <img :src="newCharacter.emotions['难过'] || './default/sad.png'" alt="失落" class="emotion-image">
+                                    <div class="emotion-name">失落</div>
+                                    <input 
+                                        type="file"
+                                        @change="uploadEmotion('难过', $event)"
+                                        class="input-field"
+                                        accept="image/*"
+                                        title="上传失落表情"
+                                    >
+                                </div>
+                                <div class="emotion-item">
+                                    <img :src="newCharacter.emotions['思考'] || './default/confused.png'" alt="平静" class="emotion-image">
+                                    <div class="emotion-name">平静</div>
+                                    <input 
+                                        type="file"
+                                        @change="uploadEmotion('思考', $event)"
+                                        class="input-field"
+                                        accept="image/*"
+                                        title="上传平静表情"
+                                    >
+                                </div>
+                                <!-- 添加自定义表情的加号按钮 -->
+                                <div class="emotion-item add-emotion-btn" @click="showAddCustomEmotion = !showAddCustomEmotion">
+                                    <div class="add-emotion-icon">+</div>
+                                    <div class="emotion-name">添加表情</div>
+                                    <div class="add-emotion-text">点击添加更多表情</div>
+                                </div>
+                            </div>
+                            
+                            <!-- 自定义表情添加区域 -->
+                            <div v-if="showAddCustomEmotion" class="add-custom-emotion">
+                                <div class="add-custom-emotion-form">
+                                    <input 
+                                        v-model="newCustomEmotionName"
+                                        placeholder="表情名称"
+                                        class="input-field"
+                                    >
+                                    <input 
+                                        type="file"
+                                        @change="uploadCustomEmotion"
+                                        class="input-field"
+                                        accept="image/*"
+                                        title="上传自定义表情"
+                                    >
+                                    <button type="button" @click="addCustomEmotion" class="btn-primary">确认添加</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 萌系表情 -->
+                        <div class="emotion-category">
+                            <h4>萌系表情</h4>
+                            <div class="emotion-item">
+                                <img :src="newCharacter.chibi" alt="萌系" class="emotion-image chibi-image">
+                                <div class="emotion-name">萌系</div>
+                                <input 
+                                    type="file"
+                                    @change="uploadChibiEmotion"
+                                    class="input-field"
+                                    accept="image/*"
+                                    title="上传萌系表情"
+                                >
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-buttons">
+                        <button type="submit" class="btn-primary">创建</button>
+                        <button type="button" @click="showAddCharacterModal = false" class="btn-secondary">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 音乐播放模态框 -->
+        <div v-if="showMusicModal" class="modal-overlay" @click="showMusicModal = false">
+            <div class="modal modal-large" @click.stop>
+                <h2>🎵 音乐播放器</h2>
+                <div class="music-player">
+                    <audio 
+                        ref="audioPlayer" 
+                        :src="currentMusic" 
+                        controls
+                        class="audio-control"
+                    ></audio>
+                    <div class="music-controls">
+                        <button class="btn-secondary" @click="prevMusic" :disabled="musicList.length === 0">上一首</button>
+                        <button class="btn-secondary" @click="nextMusic" :disabled="musicList.length === 0">下一首</button>
+                        <button class="btn-secondary" @click="importMusic">导入音乐</button>
+                        <input 
+                            ref="musicInput"
+                            type="file"
+                            @change="handleMusicImport"
+                            style="display: none"
+                            accept="audio/*"
+                            multiple
+                        >
+                    </div>
+                    <div class="music-list" v-if="musicList.length > 0">
+                        <h3>播放列表</h3>
+                        <div class="music-list-items">
+                            <div 
+                                v-for="(music, index) in musicList"
+                                :key="music.id"
+                                :class="['music-item', { active: currentMusicIndex === index }]"
+                                @click="playMusic(index)"
+                            >
+                                <div class="music-name">{{ music.name }}</div>
+                                <button @click.stop="removeMusic(index)" class="btn-icon">✕</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button @click="showMusicModal = false" class="btn-secondary">关闭</button>
+            </div>
+        </div>
+
+        <!-- API 配置模态框 -->
+        <div v-if="showApiModal" class="modal-overlay" @click="showApiModal = false">
+            <div class="modal" @click.stop>
+                <h2>⚙️ API 配置</h2>
+                <form @submit.prevent="saveApiConfig">
+                    <label>配置名称</label>
+                    <input 
+                        v-model="apiConfig.name"
+                        placeholder="为你的API配置命名"
+                        class="input-field"
+                    >
+                    <label>DeepSeek API 密钥</label>
+                    <input 
+                        v-model="apiConfig.deepseek_key"
+                        type="password"
+                        placeholder="输入你的 DeepSeek API 密钥"
+                        class="input-field"
+                    >
+                    <label>API 端点</label>
+                    <input 
+                        v-model="apiConfig.deepseek_endpoint"
+                        placeholder="https://api.deepseek.com/v1"
+                        class="input-field"
+                    >
+                    <div class="modal-buttons">
+                        <button type="submit" class="btn-primary">保存</button>
+                        <button type="button" @click="testApiConnection" class="btn-secondary">测试API</button>
+                        <button type="button" @click="showApiModal = false" class="btn-secondary">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 每日打卡模态框 -->
+        <div v-if="showDailyCheckIn" class="modal-overlay" @click="showDailyCheckIn = false">
+            <div class="modal" @click.stop>
+                <h2>📅 每日打卡</h2>
+                <div class="checkin-content">
+                    <div class="checkin-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">连续打卡:</span>
+                            <span class="stat-value">{{ dailyCheckIn.streak }}</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">总打卡次数:</span>
+                            <span class="stat-value">{{ dailyCheckIn.totalCheckIns }}</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">今日是否打卡:</span>
+                            <span class="stat-value">{{ dailyCheckIn.checkedInToday ? '已打卡 ✓' : '未打卡' }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 学习时长折线图 -->
+                    <div class="learning-chart-section">
+                        <h3>📊 学习时长记录</h3>
+                        <div class="chart-container">
+                            <div class="chart-scroll">
+                                <canvas 
+                                    ref="learningChart"
+                                    class="learning-chart"
+                                    width="600"
+                                    height="200"
+                                ></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-info">
+                            最近 {{ learningData.length }} 天的学习时长记录
+                        </div>
+                    </div>
+                    
+                    <button 
+                        v-if="!dailyCheckIn.checkedInToday"
+                        @click="performDailyCheckIn"
+                        class="btn-primary"
+                    >
+                        打卡
+                    </button>
+                    <button @click="showDailyCheckIn = false" class="btn-secondary">关闭</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 章节编辑模态框 -->
+        <div v-if="showEditChapterModal" class="modal-overlay" @click="showEditChapterModal = false">
+            <div class="modal" @click.stop>
+                <h2>✏️ 编辑章节</h2>
+                <form @submit.prevent="saveChapterEdit">
+                    <label>章节标题</label>
+                    <input 
+                        v-model="editingChapter.title"
+                        placeholder="输入章节标题"
+                        class="input-field"
+                        required
+                    >
+                    <label>章节内容</label>
+                    <textarea 
+                        v-model="editingChapter.text"
+                        placeholder="输入章节内容"
+                        class="input-field"
+                        rows="10"
+                        required
+                    ></textarea>
+                    <div class="modal-buttons">
+                        <button type="submit" class="btn-primary">保存</button>
+                        <button type="button" @click="showEditChapterModal = false" class="btn-secondary">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 设置面板按钮 -->
+        <div class="floating-menu">
+            <button class="btn-icon settings-btn" @click="showApiModal = !showApiModal" title="API设置">
+                ⚙️
+            </button>
+        </div>
+        
+        <!-- 通知组件 -->
+        <div class="notification-container" v-if="notifications.length > 0">
+            <div 
+                v-for="(notification, index) in notifications"
+                :key="index"
+                :class="['notification', notification.type]"
+                @click="removeNotification(index)"
+            >
+                <div class="notification-content">{{ notification.message }}</div>
+                <button class="notification-close" @click.stop="removeNotification(index)">✕</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
